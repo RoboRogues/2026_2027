@@ -252,13 +252,44 @@ class Drivetrain:
 # ---------- Robot ----------
 
 class VexRobot:
-    def __init__(self):
-        self.motor_fl = HardwareMotor(port=1, inverted=False)
-        self.motor_rl = HardwareMotor(port=2, inverted=False)
-        self.motor_fr = HardwareMotor(port=11, inverted=True)
-        self.motor_rr = HardwareMotor(port=12, inverted=True)
+    """
+    Port assignment notes (location / function):
+      - Drive motors (assigned in VexRobot.__init__):
+          front-left  -> port 1    (self.motor_fl)   -- array_DT[0]
+          rear-left   -> port 2    (self.motor_rl)   -- array_DT[1]
+          front-right -> port 11   (self.motor_fr)   -- array_DT[2]
+          rear-right  -> port 12   (self.motor_rr)   -- array_DT[3]
+        Note: Drivetrain expects motors in order [fl, rl, fr, rr] (self.array_DT).
 
+      - Sensors:
+          GPS                -> port 6   (self.gps)             -- used for drive_to/autotune
+          Vision (AI)        -> port 7   (self.vision)          -- get_apriltag / get_color
+          Radio              -> port 19  (self.radio)           -- optional team_color field
+          Position sensor    -> port 20  (self.position_sensor) -- added hardware position sensor
+          Bump switches      -> ports 8, 9, 13, 14 (self.bump_fl/fr/rl/rr)
+
+      - Where to change:
+          * To remap motor ports, edit the four HardwareMotor(...) lines in VexRobot.__init__.
+          * To change sensor ports, edit the corresponding HardwareXXX(...) lines in VexRobot.__init__.
+          * If you change motor order, ensure Drivetrain receives a list [fl, rl, fr, rr].
+
+      - Small-change guidance:
+          * Changing a motor port is hardware-level; update code and verify wiring before running.
+          * Changing a numeric tuning by 0.025 is safe for bench tests; changing ports requires physical checks.
+
+    """
+    def __init__(self):
+        self.motor_fl = HardwareMotor(port=1, inverted=False)   # front-left  -> port 1
+        self.motor_rl = HardwareMotor(port=2, inverted=False)   # rear-left   -> port 2
+        self.motor_fr = HardwareMotor(port=11, inverted=True)   # front-right -> port 11
+        self.motor_rr = HardwareMotor(port=12, inverted=True)   # rear-right  -> port 12
+
+        # exposed array (index: 0=fl,1=rl,2=fr,3=rr)
         self.array_DT = [self.motor_fl, self.motor_rl, self.motor_fr, self.motor_rr]
+
+        # passed into drivetrain
+        self.drive = Drivetrain(self.array_DT, self.gps)
+
         self.position_sensor = HardwarePositionSensor(port=20)
 
         self.radio = HardwareRadio(port=19)

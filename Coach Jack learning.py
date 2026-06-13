@@ -42,6 +42,9 @@ class HardwareVision:
         return None
 
     def get_apriltag(self) -> Optional[str]:
+        # APRILTAG NOTE:
+        # - Tag detection confidence thresholds matter. Requiring slightly higher confidence avoids false picks.
+        # - A change in detection threshold that causes ~0.025 change in confidence cutoff is tiny; tune by testing.
         return None
 
 
@@ -64,6 +67,9 @@ class HardwarePositionSensor:
         self.port = port
 
     def get_position(self) -> Tuple[float, float]:
+        # POSITION SENSOR NOTE:
+        # - If sensor reports in meters, a 0.025 m error is 2.5 cm and directly affects distance control and
+        #   fuzzy/distance PID. When validating, check how 0.025 m offsets change stopping and heading correction.
         return (0.0, 0.0)
 
 
@@ -79,6 +85,14 @@ class PID:
     _integral: float = 0.0
     _last_error: float = 0.0
 
+    # TUNING NOTE (0.025-step sensitivity):
+    # - Changing kp by +0.025 increases proportional output by 0.025 * error.
+    #   e.g. for 1.0 m error that is +0.025 V (very small) but for smaller errors this
+    #   can help remove steady-state offset. Increase slowly and test.
+    # - Changing ki by +0.025 increases integral accumulation rate; on long errors this
+    #   can cause steady drift. Small steps (0.025) help converge without windup.
+    # - Changing kd by +0.025 increases derivative damping; small positive steps reduce
+    #   overshoot but can amplify sensor noise. Test at bench with logs.
     def reset(self):
         self._integral = 0.0
         self._last_error = 0.0
@@ -110,9 +124,17 @@ class FuzzyController:
         return (c - x) / (c - b)
 
     def _distance_memberships(self, d: float):
+        # input: d = distance in meters
+        # example: d = 0.00 -> near ≈ 1.0, medium ≈ 0.0, far ≈ 0.0
         near = self._tri(d, 0.0, 0.05, 0.15)
+
+        # example: d = 0.10 -> near ≈ 0.2-0.5, medium ≈ 0.6-0.8, far ≈ 0.0
         medium = self._tri(d, 0.05, 0.25, 0.45)
+
+        # example: d = 0.50 -> near ≈ 0.0, medium ≈ 0.2-0.5, far ≈ 0.7-1.0
         far = self._tri(d, 0.2, 0.6, 1.5)
+
+        # returns (near, medium, far) each in range [0.0, 1.0]
         return near, medium, far
 
     def _heading_memberships(self, err_deg: float):
@@ -161,11 +183,18 @@ class Drivetrain:
         self.max_voltage = 12.0
         self.wheel_base_m = 0.30
 
+        # SENSITIVITY NOTES (0.025 steps):
+        # - max_voltage: typical system fixed; do not change often. A 0.025 V change is tiny (~0.2% of 12V).
+        # - wheel_base_m: changing by 0.025 m (2.5 cm) alters the mapping of turn_cmd -> left/right voltages.
+        #   Small adjustments shift how aggressively the robot turns for a given turn_cmd; use 0.025 steps to
+        #   observe heading drift without large re-tuning of PID.
+
     def stop(self):
         for m in self.array_DT:
             m.stop()
 
     def tank_drive_voltage(self, left_v: float, right_v: float):
+        # NOTE: small trimming here (±0.025 V) can remove low-speed bias between left/right motors.
         lv = max(-self.max_voltage, min(self.max_voltage, left_v))
         rv = max(-self.max_voltage, min(self.max_voltage, right_v))
         self.array_DT[0].set_voltage(lv)
@@ -174,6 +203,8 @@ class Drivetrain:
         self.array_DT[3].set_voltage(rv)
 
     def drive_to(self, target_x: float, target_y: float, timeout: float = 10.0):
+        # loop rate ~50 Hz (dt ≈ 0.02). Changing sleep or loop timing by small amounts affects derivative term.
+        # Small dt variations can amplify kd; if you tweak frequencies, retune kd in 0.025 steps.
         start = time.time()
         self.distance_pid.reset()
         self.heading_pid.reset()
@@ -193,6 +224,7 @@ class Drivetrain:
             dx = target_x - x
             dy = target_y - y
             distance = math.hypot(dx, dy)
+            # distance tolerance: 0.05 m. Changing tolerance by 0.025 m changes stopping criteria by 2.5 cm.
             if distance < 0.05:
                 break
 
@@ -241,6 +273,7 @@ class VexRobot:
         self.drive = Drivetrain(self.array_DT, self.gps)
 
     def select_pin_color(self, timeout: float = 2.0) -> str:
+        # Vision sampling: increasing timeout by 0.025s has negligible effect; use whole-step testing.
         start = time.time()
         while time.time() - start < timeout:
             color = self.vision.get_color()
@@ -258,6 +291,9 @@ class VexRobot:
         ])
 
     def select_alliance_tag(self, team_color: str, seen_tags: List[str]) -> Optional[str]:
+        # TAG MATCHING NOTE:
+        # - Vision/AprilTag detection reliability often varies; adding a short debounce or requiring
+        #   repeated detections reduces false positives. A 0.025s debounce is minimal; prefer >=0.1s.
         alliance_map = {
             "red": ["ALLIANCE_RED", "RED_TAG"],
             "blue": ["ALLIANCE_BLUE", "BLUE_TAG"]
@@ -318,6 +354,9 @@ class VexRobot:
 
     def drive_autotune_fuzzy(self, target_x: float, target_y: float,
                              trials: int = 6, trial_time: float = 2.0):
+        # AUTOTUNE GUIDANCE (small-step policy):
+        # - When exploring fuzzy params, change candidates in ±0.025 increments if you want very fine tuning.
+        # - Increasing trial_time by 0.025s is negligible; use larger increments (0.5-1.0s) for measurable effects.
         best_score = float("inf")
         best_params = (self.drive.fuzzy.max_forward_boost, self.drive.fuzzy.max_heading_adjust)
         base_fb, base_ha = best_params
@@ -370,6 +409,8 @@ class VexRobot:
 # ---------- Utility: brain scroller ----------
 
 def print_scrolling_in_brain(text: str, cols: int = 36, rows: int = 8, delay: float = 0.08, loops: int = 1):
+    # BRAIN SCROLLER NOTE:
+    # - Visual only; changing delay by 0.025s changes scroll smoothness visibly. Use 0.025 step to pick a pleasant pace.
     lines = text.splitlines() or [""]
     pad = [" " * cols] * rows
     stream = pad + [ln[:cols].ljust(cols) for ln in lines] + pad
@@ -401,6 +442,9 @@ def print_scrolling_in_brain(text: str, cols: int = 36, rows: int = 8, delay: fl
 # ---------- Entry point ----------
 
 def main():
+    # RUN/SAFETY NOTE:
+    # - Any automatic push/tuning or autotune should be run on bench, not in-match.
+    # - When adjusting parameters, change one parameter at a time by ~0.025 and log results before further steps.
     robot = VexRobot()
     robot.run_auton_15s()
 
